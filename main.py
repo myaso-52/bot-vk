@@ -200,7 +200,7 @@ def get_mines_keyboard(game_id):
     kb = VkKeyboard(inline=True)
     for i in range(1, 10):
         kb.add_callback_button(label=str(i), color=VkKeyboardColor.SECONDARY, payload={"action": "mine_click", "cell": i, "game_id": game_id})
-        if i in:
+        if i % 3 == 0:
             kb.add_line()
     return kb.get_keyboard()
 print("🚀 Бот 'Заработок | Бот нищий' запущен через VkBotLongPoll!")
