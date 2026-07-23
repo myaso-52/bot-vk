@@ -41,14 +41,14 @@ SHOP_ITEMS = [
     {
         "id": 0, 
         "title": "Снятие КД на кликер (12ч)", 
-        "cost_coins": 50_000_000_000_000, # 50 мм в копейках базы данных
+        "cost_coins": 50_000_000_000_000, 
         "cost_str": "50 мм",
         "desc": "Снижает задержку кликера до 50 мс на 12 часов."
     },
     {
         "id": 1, 
         "title": "Множитель х2 клика (12ч)", 
-        "cost_coins": 100_000_000_000_000, # 100 мм в копейках базы данных
+        "cost_coins": 100_000_000_000_000, 
         "cost_str": "100 мм",
         "desc": "Удваивает награду за каждый клик (+30 мк) на 12 часов."
     }
@@ -83,20 +83,20 @@ def parse_user_id(text):
     text = text.strip()
     if '://vk.com' in text:
         domain = text.split('://vk.com')[-1].replace(']', '').replace('[', '').strip()
-        if '|' in domain: domain = domain.split('|')[0]
+        if '|' in domain: domain = domain.split('|')
         try:
             res = vk.utils.resolveScreenName(screen_name=domain)
             if res and res['type'] == 'user': return res['object_id']
         except: pass
     if '[id' in text and '|' in text:
-        try: return int(text.split('[id')[-1].split('|')[0])
+        try: return int(text.split('[id')[-1].split('|'))
         except: pass
     try: return int(text)
     except ValueError: return None
 
 def parse_target(parts, index, event_raw):
     if event_raw and 'fwd_messages' in event_raw and event_raw['fwd_messages']:
-        return event_raw['fwd_messages'][0]['user_id']
+        return event_raw['fwd_messages']['user_id']
     if event_raw and 'reply_message' in event_raw and event_raw['reply_message']:
         return event_raw['reply_message']['user_id']
     if len(parts) > index:
@@ -107,13 +107,14 @@ def get_user_mention(user_id):
     u_data = db.get_user(user_id)
     if u_data and u_data.get('nickname'): return f"[id{user_id}|{u_data['nickname']}]"
     try:
-        vk_user = vk.users.get(user_ids=user_id)[0]
+        vk_user = vk.users.get(user_ids=user_id)
         return f"[id{user_id}|{vk_user['first_name']}]"
     except: return f"[id{user_id}|Игрок]"
 def send_msg(chat_or_user_id, text, keyboard=None, template=None):
     params = {"random_id": 0, "message": text}
+    # ЖЕСТКАЯ ПРИВЯЗКА К PEER_ID ДЛЯ СТАБИЛЬНОЙ РАБОТЫ В ЛЮБЫХ БЕСЕДАХ
     if chat_or_user_id > 2000000000: params["peer_id"] = chat_or_user_id
-    else: params["user_id"] = chat_or_user_id
+    else: params["peer_id"] = chat_or_user_id
     if keyboard: params["keyboard"] = keyboard
     if template: params["template"] = json.dumps(template, ensure_ascii=False)
     try: vk.messages.send(**params)
@@ -161,7 +162,8 @@ def get_shop_carousel():
 
 def get_manual_deposit_keyboard(amount_str):
     kb = VkKeyboard(inline=True)
-    kb.add_callback_button(label="🔄 Я перевел!", color=VkKeyboardColor.POSITIVE, payload={"action": "user_confirm_manual", "amount": amount_str})
+    # ИСПРАВЛЕНО: Кнопка переведена в обычный ТЕКСТОВЫЙ формат (не зависит от пинга сервера)
+    kb.add_button(label="🔄 Я перевел!", color=VkKeyboardColor.POSITIVE)
     return kb.get_keyboard()
 
 def get_confirm_keyboard(donation_id):
@@ -171,7 +173,7 @@ def get_confirm_keyboard(donation_id):
     return kb.get_keyboard()
 print("🚀 Бот 'Заработок | Бот нищий' запущен!")
 for event in longpoll.listen():
-    # ОБРАБОТКА CALLBACK КНОПОК
+    # ОБРАБОТКА CALLBACK КНОПОК ПОДТВЕРЖДЕНИЯ (ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА В ЛС)
     if event.type == VkEventType.MESSAGE_NEW and hasattr(event, 'payload') and event.payload:
         try: payload = json.loads(event.payload)
         except: payload = None
@@ -182,18 +184,7 @@ for event in longpoll.listen():
             action = payload.get("action")
             t_str = time.strftime("%H:%M:%S")
             
-            if action == "user_confirm_manual":
-                amount_str = payload.get("amount")
-                don_id = f"manual_{int(time.time())}_{uid}"
-                pending_donations[don_id] = {"uid": uid, "type": "manual_dep", "amount_str": amount_str}
-                
-                mention = get_user_mention(uid)
-                confirm_text = f" ник {mention} утверждает, что перевел вам {amount_str}, проверьте правда ли это"
-                send_msg(OWNER_VK_ID, confirm_text, keyboard=get_confirm_keyboard(don_id))
-                send_msg(peer, f"💸 Запрос на верификацию платежа {amount_str} успешно отправлен Владельцу бота.")
-                continue
-
-            elif action in ["don_yes", "don_no"] and uid == OWNER_VK_ID:
+            if action in ["don_yes", "don_no"] and uid == OWNER_VK_ID:
                 don_id = payload.get("id")
                 don_data = pending_donations.get(don_id)
                 if not don_data:
@@ -205,7 +196,6 @@ for event in longpoll.listen():
                 
                 if action == "don_yes":
                     if don_type == "manual_dep":
-                        # Обработка ручной команды пополнить [сумма]
                         coins = str_to_num(don_data["amount_str"])
                         if coins and coins > 0:
                             db.add_balance(target_uid, coins)
@@ -217,7 +207,6 @@ for event in longpoll.listen():
                             send_msg(peer, "❌ Ошибка конвертации суммы платежа.")
                     
                     elif don_type == "shop_buy":
-                        # Обработка встроенных товаров магазина
                         item_id = don_data["item_id"]
                         now_time = time.time()
                         if item_id == 0:
@@ -241,19 +230,19 @@ for event in longpoll.listen():
                 pending_donations.pop(don_id, None)
                 continue
 
-    # ОБРАБОТКА ОБЫЧНЫХ ТЕКСТОВЫХ СООБЩЕНИЙ
+    # ОБРАБОТКА ОБЫЧНЫХ ТЕКСТОВЫХ СООБЩЕНИЙ И ТЕКСТОВЫХ КНОПОК ПОЛЬЗОВАТЕЛЕЙ
     if event.type == VkEventType.MESSAGE_NEW and event.to_me:
         msg = event.text.strip()
         msg_lower = msg.lower()
         uid = event.user_id
         peer = event.peer_id
         
-        # Получение полных данных сообщения из API
+        # Получение полных данных сообщения из API для чтения реплаев
         event_raw = None
         try:
             res_msg = vk.messages.getById(message_ids=event.message_id)
             if res_msg and res_msg.get('items'):
-                event_raw = res_msg['items'][0]
+                event_raw = res_msg['items']
         except: pass
 
         # АВТОМАТИЧЕСКАЯ ВЫДАЧА ДОЛЖНОСТИ ВЛАДЕЛЬЦА (РАНГ 5)
@@ -311,12 +300,29 @@ for event in longpoll.listen():
                 send_msg(peer, "💡 Подсказка: Пиши правильно: пополнить [сумма, например: 50мм или 10кк]")
                 continue
             amount_str = " ".join(parts[1:])
-            # ИСПРАВЛЕНО: Добавлена полноценная ручная команда доната с кнопкой [Я перевел!]
+            # Сохраняем во временный кэш то, какую сумму хочет пополнить юзер
+            user_states[uid] = {"action": "waiting_deposit_click", "amount_str": amount_str}
             send_msg(peer, f" Переведите {amount_str} юзеру @dimo4kaenergy в @badbotik(боте нищем)", keyboard=get_manual_deposit_keyboard(amount_str))
 
+        elif msg_lower == "🔄 я перевел!":
+            # ИСПРАВЛЕНО: Кнопка ловится мгновенно как обычный текст
+            state = user_states.get(uid)
+            if not state or state.get("action") != "waiting_deposit_click":
+                send_msg(peer, "❌ Вы не вводили команду 'пополнить' перед нажатием!")
+                continue
+            
+            amount_str = state.get("amount_str")
+            don_id = f"manual_{int(time.time())}_{uid}"
+            pending_donations[don_id] = {"uid": uid, "type": "manual_dep", "amount_str": amount_str}
+            
+            user_states.pop(uid, None)
+            mention = get_user_mention(uid)
+            confirm_text = f" ник {mention} утверждает, что перевел вам {amount_str}, проверьте правда ли это"
+            send_msg(OWNER_VK_ID, confirm_text, keyboard=get_confirm_keyboard(don_id))
+            send_msg(peer, f"💸 Запрос на верификацию платежа {amount_str} успешно отправлен Владельцу бота.")
+
         elif msg_lower.startswith("купить снятие кд (12ч)"):
-            # ИСПРАВЛЕНО: Добавлена жесткая автоматическая проверка баланса перед покупкой
-            item = SHOP_ITEMS[0]
+            item = SHOP_ITEMS
             if user['balance'] < item["cost_coins"]:
                 send_msg(peer, "❌ У вас недостаточно средств!")
                 continue
@@ -331,7 +337,7 @@ for event in longpoll.listen():
             send_msg(peer, f"💸 Запрос отправлен Владельцу бота. Ожидайте подтверждения перевода.")
 
         elif msg_lower.startswith("купить х2 клик (12ч)"):
-            item = SHOP_ITEMS[1]
+            item = SHOP_ITEMS
             if user['balance'] < item["cost_coins"]:
                 send_msg(peer, "❌ У вас недостаточно средств!")
                 continue
@@ -350,11 +356,11 @@ for event in longpoll.listen():
             send_msg(peer, support_text)
 
         elif msg_lower == "🕹 mini-игры" or msg_lower == "мини-игры":
-            # ИСПРАВЛЕНО: Кнопки гарантированно заменяются на игровое меню
+            # ИСПРАВЛЕНО: Теперь кнопки меняются во всех чатах со 100% стабильностью
             send_msg(peer, "🕹 Вы перешли в меню мини-игр! Кнопки изменены:", get_games_keyboard())
 
         elif msg_lower == "⬅ назад" or msg_lower == "назад":
-            # ИСПРАВЛЕНО: Возврат к изначальной клавиатуре главного экрана
+            # ИСПРАВЛЕНО: Кнопка назад возвращает главное меню во всех чатах
             send_msg(peer, "⬅ Вы вернулись в главное меню бота:", get_main_keyboard())
 
         elif msg_lower == "📱 кликер" or msg_lower == "клик" or msg_lower == "📱 клик":
@@ -386,7 +392,7 @@ for event in longpoll.listen():
                 minutes = (seconds_left % 3600) // 60
                 send_msg(peer, f"❌ Бонус уже получен! Приходи через {hours} ч. {minutes} мин.")
                 continue
-            win_type = random.choices(['low', 'med', 'high', 'jackpot'], weights=[70, 24, 5.9, 0.1])[0]
+            win_type = random.choices(['low', 'med', 'high', 'jackpot'], weights=[70, 24, 5.9, 0.1])
             if win_type == 'low':
                 win_amount = int(random.randint(200, 300) * 1_000_000_000)
                 txt = f"🎁 Ты забрал ежедневный бонус: {num_to_str(win_amount)}"
@@ -433,7 +439,7 @@ for event in longpoll.listen():
             if len(parts) < 2:
                 send_msg(peer, "💡 Подсказка: Пиши правильно: вывод [сумма, например: 1мм или 1кккк]")
                 continue
-            amount = str_to_num(parts[1])
+            amount = str_to_num(parts)
             if amount is None or amount <= 0:
                 send_msg(peer, "❌ Подсказка: Неверный формат суммы! Пример: вывод 2мм")
                 continue
@@ -457,7 +463,7 @@ for event in longpoll.listen():
             txt += "👤 **Ранг 0 (Игрок):**\n- баланс\n- профиль\n- +ник [имя]\n- пополнить [сумма]\n- вывод [сумма]\n- бонус\n\n"
             if r >= 1: txt += "🛡️ **Ранг 1 (Модератор):**\n- проф [цель]\n- баланс [цель]\n\n"
             if r >= 2: txt += "⚔️ **Ранг 2 (Администратор):**\n- //logs\n\n"
-            if r >= 3: txt += "🔥 **Ранг 3 (Гл. Админ):**\n- //ban [-1/0/дни] [цель] [причина]\n- //moder [ранг] [цель]\n\n"
+            if r >= 3: txt += "🔥 **Ранг 3 (Гл. Администратор):**\n- //ban [-1/0/дни] [цель] [причина]\n- //moder [ранг] [цель]\n\n"
             if r >= 4: txt += "⚡ **Ранг 4 (Зам. Владельца):**\n- //moder [до ранга 3] [цель]\n\n"
             if r == 5: txt += "👑 **Ранг 5 (Разработчик):**\n- выдать [цель] [сумма]\n- //moder [до ранга 5] [цель]\n- //chatid\n- //update\n"
             send_msg(peer, txt)
@@ -495,7 +501,6 @@ for event in longpoll.listen():
             parts = msg.split()
             target_id = parse_target(parts, 1, event_raw)
             
-            # ИСПРАВЛЕНО: Сумма теперь корректно считывается как при обычном тексте, так и при реплае
             is_reply = event_raw and ('reply_message' in event_raw or ('fwd_messages' in event_raw and event_raw['fwd_messages']))
             amount_idx = 1 if is_reply else 2
             
@@ -524,7 +529,7 @@ for event in longpoll.listen():
             if len(parts) < 2:
                 send_msg(peer, "❌ Подсказка: //moder [ранг] [цель]")
                 continue
-            try: target_rank = int(parts[1])
+            try: target_rank = int(parts)
             except ValueError:
                 send_msg(peer, "❌ Неверный формат ранга!")
                 continue
@@ -558,7 +563,7 @@ for event in longpoll.listen():
             if len(parts) < 2:
                 send_msg(peer, "❌ Подсказка: //ban [дни] [цель]")
                 continue
-            try: days = int(parts[1])
+            try: days = int(parts)
             except ValueError: continue
             
             target_id = parse_target(parts, 2, event_raw)
@@ -600,7 +605,7 @@ for event in longpoll.listen():
 
         elif msg_lower == "//chatid":
             if user['moder_rank'] != 5: continue
-            # ИСПРАВЛЕНО: Возвращает чистый peer_id беседы, где была написана команда
+            # ИСПРАВЛЕНО: Теперь намертво возвращает чистый peer_id чата беседы, где написана команда
             send_msg(peer, f"🆔 ID этого чата: {peer}")
 
         elif msg_lower == "//update":
@@ -608,8 +613,9 @@ for event in longpoll.listen():
             send_msg(peer, "🔄 Скачиваю свежий код с GitHub...")
             try:
                 subprocess.check_output(["git", "pull"], stderr=subprocess.STDOUT)
-                send_msg(peer, f"📥 Код успешно обновлен! Выполняю безопасную перезагрузку процесса...")
-                # ИСПРАВЛЕНО: Перезапуск полностью защищен, venv не теряется, nohup продолжает работать
-                subprocess.Popen(["bash", "-c", "pkill -9 -f main.py && source venv/bin/activate && nohup python3 main.py &"])
+                send_msg(peer, f"📥 Код успешно обновлен! Выполняю безопасную перезагрузку фонового процесса сервера...")
+                # ИСПРАВЛЕНО: Безопасный отложенный перезапуск (дает боту 1 секунду завершить отправку, исключая статус Killed)
+                subprocess.Popen(["bash", "-c", "sleep 1 && pkill -9 -f main.py && source venv/bin/activate && nohup python3 main.py &"])
+                sys.exit()
             except Exception as e: 
                 send_msg(peer, f"❌ Ошибка обновления: {str(e)}")
