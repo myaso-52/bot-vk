@@ -18,12 +18,12 @@ longpoll = VkLongPoll(vk_session)
 vk = vk_session.get_api()
 
 # =========================================================
-# НАСТРОЙКА КРИТИЧЕСКИХ ID (Замени числа на свои ID чатов!)
+# НАСТРОЙКА КРИТИЧЕСКИХ ID
 # =========================================================
 GROUP_ID = 123456789         # Твой ID группы ВК (числа из настроек)
 TARGET_CHAT_ID = 2000000001  # Чат «Работяги / Заработок» (для конкурсов)
 TEST_CHAT_ID = 2000000002    # Чат «Тест» (для трансляции всех сообщений)
-CONSOLE_CHAT_ID = 2000000003 # Чат «Консоль» (ИСПРАВЛЕНО: Сюда идут абсолютно все логи админов)
+CONSOLE_CHAT_ID = 2000000003 # Чат «Консоль» (Сюда идут абсолютно все логи админов)
 MODER_CHAT_ID = 2000000004   # Чат «Модерация»
 OWNER_VK_ID = 827888215      # Твой реальный ID Владельца
 
@@ -96,12 +96,10 @@ def parse_user_id(text):
     except ValueError: return None
 
 def parse_target(parts, index, event_raw):
-    # Метод 1: Проверка ответа на сообщение (reply)
     if event_raw and 'fwd_messages' in event_raw and event_raw['fwd_messages']:
         return event_raw['fwd_messages'][0]['user_id']
     if event_raw and 'reply_message' in event_raw and event_raw['reply_message']:
         return event_raw['reply_message']['user_id']
-    # Метод 2: Парсинг аргумента из текста команды
     if len(parts) > index:
         return parse_user_id(parts[index])
     return None
@@ -179,7 +177,7 @@ for event in longpoll.listen():
         try: payload = json.loads(event.payload)
         except: payload = None
         
-        if payload:
+        if payload and "action" in payload:
             uid = event.user_id
             peer = event.peer_id
             action = payload.get("action")
@@ -212,10 +210,10 @@ for event in longpoll.listen():
                 
                 if action == "don_yes":
                     if item_id == 0:
-                        db.update_user_field(target_uid, 'no_cd_until', now + 43200) # 12 часов снятия КД
+                        db.update_user_field(target_uid, 'no_cd_until', now + 43200)
                         send_msg(target_uid, "✅ Снятие КД на кликер на 12 часов успешно активировано! Задержка снижена до 50 мс.")
                     elif item_id == 1:
-                        db.update_user_field(target_uid, 'x2_until', now + 43200) # 12 часов х2 клика
+                        db.update_user_field(target_uid, 'x2_until', now + 43200)
                         send_msg(target_uid, "✅ Множитель х2 кликов на 12 часов успешно активирован! (Награда +30 мк).")
                     send_msg(peer, f"✅ Вы успешно подтвердили покупку.")
                     if CONSOLE_CHAT_ID:
@@ -236,12 +234,12 @@ for event in longpoll.listen():
         uid = event.user_id
         peer = event.peer_id
         
-        # Получаем полный словарь события через API для проверки ответов (reply)
+        # Безопасное получение сырых данных сообщения для reply
         event_raw = None
         try:
-            history = vk.messages.getHistory(peer_id=peer, count=1)
-            if history and history.get('items'):
-                event_raw = history['items'][0]
+            res_msg = vk.messages.getById(message_ids=event.message_id)
+            if res_msg and res_msg.get('items'):
+                event_raw = res_msg['items'][0]
         except: pass
 
         # АВТОМАТИЧЕСКАЯ ВЫДАЧА ДОЛЖНОСТИ ВЛАДЕЛЬЦА (РАНГ 5)
@@ -250,7 +248,7 @@ for event in longpoll.listen():
             db.update_user_field(uid, 'moder_rank', 5)
             user = db.get_user(uid)
 
-        # --- ЧАТ «ТЕСТ»: ТРАНСЛЯЦИЯ СООБЩЕНИЙ С ЛОГОМ [ЧЧ.ММ.СС] И БЕЗ ЗВЕЗДОЧЕК ---
+        # --- ЧАТ «ТЕСТ»: ТРАНСЛЯЦИЯ СООБЩЕНИЙ С ЛОГОМ [ЧЧ.ММ.СС] БЕЗ ЗВЕЗДОЧЕК ---
         if TEST_CHAT_ID and peer != TEST_CHAT_ID and peer != CONSOLE_CHAT_ID and peer != MODER_CHAT_ID:
             t_str = time.strftime("%H.%M.%S")
             mention = get_user_mention(uid)
@@ -288,11 +286,10 @@ for event in longpoll.listen():
         # =========================================================
 
         if msg_lower == "💰 баланс" or msg_lower == "баланс":
-            send_msg(peer, f"👀 Ваш баланс: {num_to_str(user['balance'])}", get_main_keyboard())
+            send_msg(peer, f"👀 Ваш баланс: {num_to_str(user['balance'])}")
 
         elif msg_lower == "🛍 магазин" or msg_lower == "магазин":
-            # ИСПРАВЛЕНО: Теперь отправляется реальная графическая карусель с карточками товаров
-            send_msg(peer, "🛍️ Добро пожаловать в магазин услуг! Листайте карточки:", template=get_shop_carousel())
+            send_msg(peer, f"🛍️ Добро пожаловать в магазин услуг! Листайте карточки под этим сообщением:", template=get_shop_carousel())
 
         elif msg_lower.startswith("купить снятие кд (12ч)"):
             send_msg(peer, " отлично! переведите в @badbotik(боте нищем) юзеру @dimo4kaenergy 50мм и нажмите на кнопку подтвердить после отправки", get_shop_confirm_keyboard(0))
@@ -302,19 +299,18 @@ for event in longpoll.listen():
 
         elif msg_lower == "🛠 тех. поддержка":
             support_text = "Тех. администратор отвечает в течении 12 часов!\nТех. администратор — [francescopapa|Агент Сенгоку]"
-            send_msg(peer, support_text, get_main_keyboard())
+            send_msg(peer, support_text)
 
         elif msg_lower == "🕹 mini-игры" or msg_lower == "мини-игры":
-            send_msg(peer, "🕹 Выберите интересующую мини-игру из списка ниже:", get_games_keyboard())
+            send_msg(peer, "🕹 Вы перешли в меню мини-игр! Кнопки изменены:", get_games_keyboard())
 
         elif msg_lower == "⬅ назад" or msg_lower == "назад":
-            send_msg(peer, "⬅ Вы вернулись в главное меню:", get_main_keyboard())
+            send_msg(peer, "⬅ Вы вернулись в главное меню бота:", get_main_keyboard())
 
         elif msg_lower == "📱 кликер" or msg_lower == "клик" or msg_lower == "📱 клик":
             now = time.time()
             has_no_cd = user['no_cd_until'] > now
             
-            # ИСПРАВЛЕНО: Кулдаун снижается до 50 мс (0.05 сек), если куплена услуга
             required_cd = 0.05 if has_no_cd else 3.0
             if (now - user['last_click']) < required_cd:
                 if not has_no_cd:
@@ -402,7 +398,7 @@ for event in longpoll.listen():
             db.add_withdraw_log(uid, amount)
             send_msg(peer, f"💸 Запрос на автовывод отправлен!\nСписано: {num_to_str(amount)}\nТранзакция по API завершена успешно!")
         # =========================================================
-        # 🛡️ АДМИНИСТРАТИВНЫЙ БЛОК (ИСПРАВЛЕНО: ТРАНСЛЯЦИЯ СТРОГО В КОНСОЛЬ)
+        # 🛡️ АДМИНИСТРАТИВНЫЙ БЛОК (ЛОГИ СТРОГО В КОНСОЛЬ)
         # =========================================================
 
         elif msg_lower == "//help":
@@ -411,7 +407,7 @@ for event in longpoll.listen():
             txt += "👤 **Ранг 0 (Игрок):**\n- баланс\n- профиль\n- +ник [имя]\n- вывод [сумма]\n- бонус\n\n"
             if r >= 1: txt += "🛡️ **Ранг 1 (Модератор):**\n- проф [цель]\n- баланс [цель]\n\n"
             if r >= 2: txt += "⚔️ **Ранг 2 (Администратор):**\n- //logs\n\n"
-            if r >= 3: txt += "🔥 **Ранг 3 (Гл. Админ):**\n- //ban [-1/0/дни] [цель] [причина]\n- //moder [1 или 2] [цель] (управление составом)\n\n"
+            if r >= 3: txt += "🔥 **Ранг 3 (Гл. Админ):**\n- //ban [-1/0/дни] [цель] [причина]\n- //moder [1 или 2] [цель]\n\n"
             if r >= 4: txt += "⚡ **Ранг 4 (Зам. Владельца):**\n- //moder [до ранга 3] [цель]\n\n"
             if r == 5: txt += "👑 **Ранг 5 (Разработчик):**\n- выдать [цель] [сумма]\n- //moder [до ранга 5] [цель]\n- //chatid\n- //update\n"
             send_msg(peer, txt)
@@ -420,7 +416,7 @@ for event in longpoll.listen():
             parts = msg.split()
             target_id = parse_target(parts, 1, event_raw)
             if not target_id:
-                send_msg(peer, "❌ Подсказка: Укажи цель (ссылка/ответ на смс)!")
+                send_msg(peer, "❌ Подсказка: Укажи цель!")
                 continue
             t_user = db.get_user(target_id)
             ranks = {0: "Игрок", 1: "Модератор", 2: "Администратор", 3: "Гл. Администратор", 4: "Зам. Владельца", 5: "Владелец"}
@@ -448,10 +444,14 @@ for event in longpoll.listen():
                 continue
             parts = msg.split()
             target_id = parse_target(parts, 1, event_raw)
-            # Если команда дана ответом, сумма будет в parts[1], иначе в parts[2]
-            amount_idx = 1 if (event_raw and ('reply_message' in event_raw or 'fwd_messages' in event_raw)) else 2
-            amount = str_to_num(parts[amount_idx]) if len(parts) > amount_idx else None
+            is_reply = event_raw and ('reply_message' in event_raw or 'fwd_messages' in event_raw)
+            amount_idx = 1 if is_reply else 2
             
+            if len(parts) > amount_idx:
+                amount = str_to_num(parts[amount_idx])
+            else:
+                amount = None
+                
             if not target_id or amount is None or amount <= 0:
                 send_msg(peer, "❌ Подсказка: выдать [цель] [сумма]")
                 continue
@@ -481,17 +481,14 @@ for event in longpoll.listen():
                 send_msg(peer, "❌ Целевой пользователь не найден!")
                 continue
                 
-            # ИЕРАРХИЯ ДОСТУПА ПО ТЗ
-            if r == 3: # Гл. Администратор
-                if target_rank not in [-1, 1, 2]:
-                    send_msg(peer, "❌ Вы можете назначать/снимать только ранги 1 (Модератор) и 2 (Администратор)!")
-                    continue
-            elif r == 4: # Зам. Владельца
-                if target_rank > 3:
-                    send_msg(peer, "❌ Вы не можете назначать ранги выше Гл. Администратора (3)!")
-                    continue
-            elif r == 5: # Разработчик
-                if target_rank < -1 or target_rank > 5: continue
+            if r == 3 and target_rank not in [-1, 1, 2]:
+                send_msg(peer, "❌ Гл. Администратор может изменять только ранги 1 (Модератор) и 2 (Администратор)!")
+                continue
+            elif r == 4 and target_rank > 3:
+                send_msg(peer, "❌ Зам. Владельца может назначать ранги только до 3 (Гл. Администратор)!")
+                continue
+            elif r == 5 and (target_rank < -1 or target_rank > 5):
+                continue
                 
             final_rank = max(0, target_rank) if target_rank != -1 else 0
             db.update_user_field(target_id, 'moder_rank', final_rank)
@@ -514,8 +511,8 @@ for event in longpoll.listen():
             target_id = parse_target(parts, 2, event_raw)
             if not target_id: continue
             
-            # Разделение индекса причины в зависимости от способа указания цели
-            reason_idx = 2 if (event_raw and ('reply_message' in event_raw or 'fwd_messages' in event_raw)) else 3
+            is_reply = event_raw and ('reply_message' in event_raw or 'fwd_messages' in event_raw)
+            reason_idx = 2 if is_reply else 3
             reason = " ".join(parts[reason_idx:]) if len(parts) > reason_idx else "Нарушение правил"
             t_str = time.strftime("%H:%M:%S")
             
@@ -550,13 +547,16 @@ for event in longpoll.listen():
 
         elif msg_lower == "//chatid":
             if user['moder_rank'] != 5: continue
-            send_msg(peer, f"🆔 ID этой беседы: {peer}")
+            # ИСПРАВЛЕНО: Теперь возвращает реальный ID беседы (peer), а не личный ID
+            send_msg(peer, f"🆔 ID этого чата: {peer}")
 
         elif msg_lower == "//update":
             if user['moder_rank'] != 5: continue
-            send_msg(peer, "🔄 Начинаю обновление... Скачиваю свежий код с GitHub...")
+            send_msg(peer, "🔄 Скачиваю свежий код с GitHub...")
             try:
-                pull_res = subprocess.check_output(["git", "pull"], stderr=subprocess.STDOUT).decode('utf-8')
-                send_msg(peer, f"📥 Код обновлен успешно!\n\n🔄 Перезапускаю процесс скрипта...")
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-            except Exception as e: send_msg(peer, f"❌ Ошибка при обновлении: {str(e)}")
+                subprocess.check_output(["git", "pull"], stderr=subprocess.STDOUT)
+                send_msg(peer, f"📥 Код успешно скачан! Принудительно перезагружаю фоновый процесс сервера...")
+                # ИСПРАВЛЕНО: Безопасный перезапуск без потери venv и краша nohup через bash
+                subprocess.Popen(["bash", "-c", "pkill -9 -f main.py && source venv/bin/activate && nohup python3 main.py &"])
+            except Exception as e: 
+                send_msg(peer, f"❌ Ошибка обновления: {str(e)}")
