@@ -3,6 +3,7 @@ from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from src.config import VK_TOKEN
 import src.db as db
+import sqlite3
 import random
 import time
 import sys
@@ -21,10 +22,22 @@ vk = vk_session.get_api()
 # НАСТРОЙКА КРИТИЧЕСКИХ ID (Замени числа на свои ID чатов!)
 # =========================================================
 GROUP_ID = 123456789         # Твой ID группы ВК (числа из настроек)
-TARGET_CHAT_ID = 2000000001  # Чат «Работяги / Заработок» (для конкурсов)
-TEST_CHAT_ID = 2000000001    # Чат «Тест» (для трансляции всех сообщений)
-CONSOLE_CHAT_ID = 2000000001 # Чат «Консоль» (Сюда идут абсолютно все логи админов)
+TARGET_CHAT_ID = 2000000001  # Чат «Работяги / Бот заработок» (от сообщества)
+TEST_CHAT_ID = 2000000002    # Чат «Тест / бот заработок» (для тестов)
+MODER_CHAT_ID = 2000000004   # Чат «Модерация / Бот заработок» (для админов и модеров)
+CONSOLE_CHAT_ID = 2000000003 # Чат «Консоль / Бот заработок» (для логов админов)
 OWNER_VK_ID = 827888215      # Твой реальный ID Владельца
+
+# ИСПРАВЛЕНО: Авто-добавление отсутствующей колонки x2_until в базу данных при старте скрипта
+try:
+    conn = sqlite3.connect('database.db') # Укажи точное имя файла твоей БД, если оно другое
+    cursor = conn.cursor()
+    cursor.execute("ALTER TABLE users ADD COLUMN x2_until INTEGER DEFAULT 0")
+    conn.commit()
+    conn.close()
+    print("⚠️ Колонка x2_until успешно добавлена в структуру БД!")
+except sqlite3.OperationalError:
+    pass # Если колонка уже создана, просто пропускаем ошибку
 
 # ПЕРЕМЕННЫЕ ДЛЯ ЕЖЕЧАСНОГО КОНКУРСА И КЭША
 next_contest_time = time.time() + 3600
@@ -33,22 +46,23 @@ is_contest_active = False
 WORDS_POOL = ["миллион", "баланс", "бонус", "крипта", "розыгрыш", "скорость", "приз", "работяга", "нищий", "кликер"]
 ban_notified_users = {}
 
-# Глобальное хранилище для ожидающих донатов
+# ИСПРАВЛЕНО: Возвращены глобальные переменные состояний донатов во избежание NameError
+user_states = {}
 pending_donations = {}
 
-# Список товаров для Карусели (Шаблон VK Template)
+# Список товаров для Карусели Магазина
 SHOP_ITEMS = [
     {
         "id": 0, 
         "title": "Снятие КД на кликер (12ч)", 
-        "cost_coins": 50_000_000_000_000, # 50 мм в копейках базы данных
+        "cost_coins": 50_000_000_000_000, 
         "cost_str": "50 мм",
         "desc": "Снижает задержку кликера до 50 мс на 12 часов."
     },
     {
         "id": 1, 
         "title": "Множитель х2 клика (12ч)", 
-        "cost_coins": 100_000_000_000_000, # 100 мм в копейках базы данных
+        "cost_coins": 100_000_000_000_000, 
         "cost_str": "100 мм",
         "desc": "Удваивает награду за каждый клик (+30 мк) на 12 часов."
     }
@@ -83,20 +97,20 @@ def parse_user_id(text):
     text = text.strip()
     if '://vk.com' in text:
         domain = text.split('://vk.com')[-1].replace(']', '').replace('[', '').strip()
-        if '|' in domain: domain = domain.split('|')[0]
+        if '|' in domain: domain = domain.split('|')
         try:
             res = vk.utils.resolveScreenName(screen_name=domain)
             if res and res['type'] == 'user': return res['object_id']
         except: pass
     if '[id' in text and '|' in text:
-        try: return int(text.split('[id')[-1].split('|')[0])
+        try: return int(text.split('[id')[-1].split('|'))
         except: pass
     try: return int(text)
     except ValueError: return None
 
 def parse_target(parts, index, event_raw):
     if event_raw and 'fwd_messages' in event_raw and event_raw['fwd_messages']:
-        return event_raw['fwd_messages'][0]['user_id']
+        return event_raw['fwd_messages']['user_id']
     if event_raw and 'reply_message' in event_raw and event_raw['reply_message']:
         return event_raw['reply_message']['user_id']
     if len(parts) > index:
@@ -107,16 +121,16 @@ def get_user_mention(user_id):
     u_data = db.get_user(user_id)
     if u_data and u_data.get('nickname'): return f"[id{user_id}|{u_data['nickname']}]"
     try:
-        vk_user = vk.users.get(user_ids=user_id)[0]
+        vk_user = vk.users.get(user_ids=user_id)
         return f"[id{user_id}|{vk_user['first_name']}]"
     except: return f"[id{user_id}|Игрок]"
 def send_msg(chat_or_user_id, text, keyboard=None, template=None):
     params = {"random_id": 0, "message": text}
-    # ИСПРАВЛЕНО: Теперь бот чётко разделяет отправку в ЛС и в групповые беседы
+    # ИСПРАВЛЕНО: Бот железобетонно шлет ответы в любые чаты, беседы и ЛС
     if int(chat_or_user_id) > 2000000000:
         params["peer_id"] = chat_or_user_id
     else:
-        params["user_id"] = chat_or_user_id
+        params["peer_id"] = chat_or_user_id  # ВК принимает peer_id как для ЛС, так и для бесед универсально
     if keyboard: params["keyboard"] = keyboard
     if template: params["template"] = json.dumps(template, ensure_ascii=False)
     try: vk.messages.send(**params)
@@ -136,13 +150,15 @@ def get_main_keyboard():
     kb.add_button('🛠 Тех. поддержка', color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
-def get_games_keyboard():
-    kb = VkKeyboard(one_time=False)
-    kb.add_button('📱 Кликер', color=VkKeyboardColor.PRIMARY)
-    kb.add_button('💣 Мины', color=VkKeyboardColor.PRIMARY)
-    kb.add_button('🕵‍♂ Загадки', color=VkKeyboardColor.PRIMARY)
-    kb.add_line()
-    kb.add_button('⬅ Назад', color=VkKeyboardColor.SECONDARY)
+def get_manual_deposit_keyboard():
+    kb = VkKeyboard(inline=True)
+    kb.add_button(label="🔄 Я перевел!", color=VkKeyboardColor.POSITIVE)
+    return kb.get_keyboard()
+
+def get_confirm_keyboard(donation_id):
+    kb = VkKeyboard(inline=True)
+    kb.add_callback_button(label="✅ Подтвердить", color=VkKeyboardColor.POSITIVE, payload={"action": "don_yes", "id": donation_id})
+    kb.add_callback_button(label="❌ Отказать", color=VkKeyboardColor.NEGATIVE, payload={"action": "don_no", "id": donation_id})
     return kb.get_keyboard()
 
 def get_shop_carousel():
@@ -159,17 +175,6 @@ def get_shop_carousel():
             }]
         })
     return {"type": "carousel", "elements": elements}
-
-def get_manual_deposit_keyboard():
-    kb = VkKeyboard(inline=True)
-    kb.add_button(label="🔄 Я перевел!", color=VkKeyboardColor.POSITIVE)
-    return kb.get_keyboard()
-
-def get_confirm_keyboard(donation_id):
-    kb = VkKeyboard(inline=True)
-    kb.add_callback_button(label="✅ Подтвердить", color=VkKeyboardColor.POSITIVE, payload={"action": "don_yes", "id": donation_id})
-    kb.add_callback_button(label="❌ Отказать", color=VkKeyboardColor.NEGATIVE, payload={"action": "don_no", "id": donation_id})
-    return kb.get_keyboard()
 print("🚀 Бот 'Заработок | Бот нищий' запущен!")
 for event in longpoll.listen():
     # ОБРАБОТКА CALLBACK КНОПОК ПОДТВЕРЖДЕНИЯ (ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА В ЛС)
@@ -222,7 +227,7 @@ for event in longpoll.listen():
         try:
             res_msg = vk.messages.getById(message_ids=event.message_id)
             if res_msg and res_msg.get('items'):
-                event_raw = res_msg['items'][0]
+                event_raw = res_msg['items']
         except: pass
 
         user = db.get_user(uid)
@@ -230,7 +235,8 @@ for event in longpoll.listen():
             db.update_user_field(uid, 'moder_rank', 5)
             user = db.get_user(uid)
 
-        if TEST_CHAT_ID and peer != TEST_CHAT_ID and peer != CONSOLE_CHAT_ID:
+        # Лог трансляции в тестовый чат
+        if TEST_CHAT_ID and peer != TEST_CHAT_ID and peer != CONSOLE_CHAT_ID and peer != MODER_CHAT_ID:
             t_str = time.strftime("%H.%M.%S")
             mention = get_user_mention(uid)
             send_msg(TEST_CHAT_ID, f"[{t_str}] {msg} от {mention}")
@@ -279,7 +285,7 @@ for event in longpoll.listen():
             db.update_user_field(uid, 'no_cd_until', time.time() + 43200)
             send_msg(peer, "✅ Списание успешно! Снятие КД на кликер на 12 часов успешно активировано! Задержка снижена до 50 мс.")
 
-        elif msg_lower.startswith("получить множитель х2 клика"):
+        elif msg_lower.startswith("получить множитель х2 кл"):
             item = SHOP_ITEMS[1]
             if user['balance'] < item["cost_coins"]:
                 send_msg(peer, "❌ У вас недостаточно средств!")
@@ -317,12 +323,15 @@ for event in longpoll.listen():
             send_msg(peer, "Тех. администратор отвечает в течении 12 часов!\nТех. администратор — [francescopapa|Агент Сенгоку]")
 
         elif msg_lower == "🕹 mini-игры" or msg_lower == "мини-игры":
-            # ИСПРАВЛЕНО: Выводится красивое текстовое меню, а кнопки заменяются во ВСЕХ чатах
-            txt_menu = "🕹 **СПИСОК ДОСТУПНЫХ МИНИ-ИГР:**\n\n📱 [Кликер] — Кликай и зарабатывай копейки!\n💣 [Мины] — Классический сапер на удачу!\n🕵‍♂ [Загадки] — Отгадывай слова админов!\n\nВыбери нужную игру на клавиатуре снизу:"
-            send_msg(peer, txt_menu, get_games_keyboard())
-
-        elif msg_lower == "⬅ назад" or msg_lower == "назад":
-            send_msg(peer, "⬅ Вы вернулись в главное меню бота:", get_main_keyboard())
+            # ИСПРАВЛЕНО: Кнопки главного меню не трогаются, выводится стабильный текстовый список игр и команд
+            txt_menu = (
+                "🕹 **СПИСОК ДОСТУПНЫХ МИНИ-ИГР:**\n\n"
+                "📱 [Команда: клик] — Кликай и зарабатывай копейки!\n"
+                "💣 [Команда: мины] — Классический сапер на удачу!\n"
+                "🕵 [Команда: загадки] — Отгадывай слова админов!\n\n"
+                "Напиши название или команду нужной игры текстом в чат!"
+            )
+            send_msg(peer, txt_menu)
 
         elif msg_lower == "📱 кликер" or msg_lower == "клик" or msg_lower == "📱 клик":
             now = time.time()
@@ -566,16 +575,15 @@ for event in longpoll.listen():
 
         elif msg_lower == "//chatid":
             if user['moder_rank'] != 5: continue
-            # ИСПРАВЛЕНО: Теперь намертво возвращает чистый peer_id чата беседы, где написана команда
-            send_msg(peer, f"🆔 ID этого чата: {peer}")
+            # ИСПРАВЛЕНО: Теперь намертво возвращает строго чистые цифры peer_id чата беседы
+            send_msg(peer, f"{peer}")
 
         elif msg_lower == "//update":
             if user['moder_rank'] != 5: continue
-            send_msg(peer, "🔄 Скачиваю свежий код с GitHub...")
+            send_msg(peer, "🔄 Запускаю принудительный перезапуск: pkill -9 -f main.py && git pull && python3 main.py...")
             try:
-                subprocess.check_output(["git", "pull"], stderr=subprocess.STDOUT)
-                send_msg(peer, f"📥 Код успешно обновлен! Выполняю безопасную перезагрузку процесса...")
-                subprocess.Popen(["bash", "-c", "sleep 1 && pkill -9 -f main.py && source venv/bin/activate && nohup python3 main.py &"])
+                # ИСПРАВЛЕНО: Точный синтаксис обновления по твоему ТЗ через отложенный фоновый шелл
+                subprocess.Popen(["bash", "-c", "sleep 1 && pkill -9 -f main.py && git pull && source venv/bin/activate && nohup python3 main.py &"])
                 sys.exit()
             except Exception as e: 
                 send_msg(peer, f"❌ Ошибка обновления: {str(e)}")
